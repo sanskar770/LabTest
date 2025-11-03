@@ -1,86 +1,57 @@
-from flask import Flask, jsonify, request
-import random
+# app.py
+# Train a tiny sklearn model (Iris) and serve predictions via Flask.
+import os
+import joblib
+from flask import Flask, request, jsonify
+from sklearn.datasets import load_iris
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
 
+MODEL_PATH = "model.pkl"
 app = Flask(__name__)
 
-# Serve a simple webpage directly from Flask
-@app.route('/')
+def train_and_save():
+    data = load_iris()
+    X_train, X_test, y_train, y_test = train_test_split(
+        data.data, data.target, test_size=0.2, random_state=42
+    )
+    clf = RandomForestClassifier(n_estimators=50, random_state=42)
+    clf.fit(X_train, y_train)
+    acc = clf.score(X_test, y_test)
+    joblib.dump(clf, MODEL_PATH)
+    print(f"Trained RandomForest; test acc={acc:.3f}; model saved to {MODEL_PATH}")
+    return clf
+
+def load_model():
+    if os.path.exists(MODEL_PATH):
+        return joblib.load(MODEL_PATH)
+    else:
+        return train_and_save()
+
+model = load_model()
+
+@app.route("/")
 def index():
-    return """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Real-Time Health Monitoring</title>
-        <style>
-            body {
-                font-family: Arial, sans-serif;
-                text-align: center;
-                background: linear-gradient(135deg, #1f1c2c, #928dab);
-                color: #fff;
-                padding: 50px;
-            }
-            h1 { font-size: 2em; }
-            .data-box {
-                background: rgba(255,255,255,0.1);
-                padding: 20px;
-                margin: 10px auto;
-                width: 250px;
-                border-radius: 10px;
-                box-shadow: 0 0 10px rgba(255,255,255,0.3);
-            }
-            span { font-weight: bold; font-size: 1.4em; }
-        </style>
-        <script>
-            async function fetchData() {
-                const response = await fetch('/get_data');
-                const data = await response.json();
-                document.getElementById('heart_rate').innerText = data.heart_rate + " bpm";
-                document.getElementById('spo2').innerText = data.spo2 + " %";
-                document.getElementById('temperature').innerText = data.temperature + " °C";
-            }
-            setInterval(fetchData, 2000); // Fetch every 2 seconds
-            window.onload = fetchData;
-        </script>
-    </head>
-    <body>
-        <h1>🩺 Real-Time Health Monitoring</h1>
-        <div class="data-box">
-            <h2>Heart Rate: <span id="heart_rate">--</span></h2>
-        </div>
-        <div class="data-box">
-            <h2>SpO₂: <span id="spo2">--</span></h2>
-        </div>
-        <div class="data-box">
-            <h2>Temperature: <span id="temperature">--</span></h2>
-        </div>
-    </body>
-    </html>
-    """
+    return "ML-Ops demo: RandomForest Iris model. POST /predict with json {'features': [..4 values..]}"
 
-# Simulate live data API endpoint
-@app.route('/get_data')
-def get_data():
-    data = {
-        'heart_rate': random.randint(60, 120),
-        'spo2': random.randint(90, 100),
-        'temperature': round(random.uniform(36.0, 38.0), 1)
-    }
-    return jsonify(data)
+@app.route("/predict", methods=["POST"])
+def predict():
+    payload = request.get_json()
+    if not payload or "features" not in payload:
+        return jsonify({"error": "provide JSON with key 'features' (list of 4 numbers)"}), 400
+    features = payload["features"]
+    try:
+        pred = model.predict([features]).tolist()
+        proba = model.predict_proba([features]).tolist()
+        return jsonify({"prediction": pred[0], "proba": proba[0]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
-# Optional: receive POST requests (e.g., from sensors)
-@app.route('/submit', methods=['POST'])
-def submit():
-    content = request.get_json()
-    print("Received Data:", content)
-    return jsonify({'status': 'success', 'message': 'Data received successfully!'})
+@app.route("/retrain", methods=["POST"])
+def retrain():
+    global model
+    model = train_and_save()
+    return jsonify({"status": "retrained", "model_path": MODEL_PATH})
 
-if __name__ == '__main__':
-    app.run(debug=True)
-
-        
-
-
-
-        
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
